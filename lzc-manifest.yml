@@ -6,7 +6,6 @@ application:
       backend: file:///lzcapp/pkg/content/licenses/
     - location: /
       backend: http://restserver:7880/
-
 services:
   db:
     image: docker.1ms.run/library/postgres:16-alpine
@@ -25,7 +24,6 @@ services:
       start_period: 20s
     binds:
       - /lzcapp/var/pgdata:/var/lib/postgresql/data
-
   solr:
     image: docker.1ms.run/library/solr:10
     # The docspell search URL points at /solr/docspell, but the base image does
@@ -47,10 +45,9 @@ services:
       start_period: 30s
     binds:
       - /lzcapp/var/solr:/var/solr
-
   restserver:
-    # upstream: ghcr.io/docspell/restserver:v0.43.0
-    image: ghcr.1ms.run/docspell/restserver:v0.43.0
+    # upstream: docspell/restserver:v0.42.0
+    image: docker.1ms.run/docspell/restserver:v0.42.0
     depends_on:
       - db
       - solr
@@ -75,12 +72,11 @@ services:
       - DOCSPELL_ADDONS_ENABLED=false
     binds:
       - /lzcapp/var/files:/data
-
   joex:
-    image: ghcr.1ms.run/docspell/joex:v0.43.0
+    # upstream: docspell/joex:v0.42.0
+    image: docker.1ms.run/docspell/joex:v0.42.0
     depends_on:
-    - db
-      - solr
+      - db - solr
     environment:
       - TZ=Asia/Shanghai
       - DOCSPELL_JOEX_APP__ID=joex1
@@ -97,7 +93,6 @@ services:
       - DOCSPELL_JOEX_ADDONS_EXECUTOR__CONFIG_RUNNER=trivial
     binds:
       - /lzcapp/var/files:/data
-
 usage: |
   Docspell 是个人文档管理工具：把扫描件和电子文件统一收进来，自动 OCR、打标签、做全文检索。
 
