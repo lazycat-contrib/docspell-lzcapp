@@ -10,7 +10,7 @@ update:
   allow_downgrade: false
   version_source:
     type: image
-    image: restserver
+    image: ghcr.io/docspell/restserver
 build:
   toolchains: []
   run_buildscript: false
@@ -18,7 +18,7 @@ images:
   - id: restserver
     target: service
     service: restserver
-    source: docspell/restserver
+    source: ghcr.io/docspell/restserver
     channel: stable
     sort: semver
     tag_regex: ^v[0-9]+[.][0-9]+[.][0-9]+$
@@ -29,7 +29,7 @@ images:
   - id: joex
     target: service
     service: joex
-    source: docspell/joex
+    source: ghcr.io/docspell/joex
     channel: stable
     sort: semver
     tag_regex: ^v[0-9]+[.][0-9]+[.][0-9]+$
