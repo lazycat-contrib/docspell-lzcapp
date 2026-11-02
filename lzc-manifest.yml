@@ -1,0 +1,126 @@
+application:
+  subdomain: docspell
+  multi_instance: false
+  upstreams:
+    - location: /package-licenses/
+      backend: file:///lzcapp/pkg/content/licenses/
+    - location: /
+      backend: http://restserver:7880/
+
+services:
+  db:
+    image: docker.1ms.run/library/postgres:16-alpine
+    environment:
+      - POSTGRES_DB=docspell
+      - POSTGRES_USER=docspell
+      - |-
+        POSTGRES_PASSWORD={{ stable_secret "docspell_db_password" | replace "\r" "" | replace "\n" "" }}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U docspell -d docspell
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    binds:
+      - /lzcapp/var/pgdata:/var/lib/postgresql/data
+
+  solr:
+    image: docker.1ms.run/library/solr:10
+    # The docspell search URL points at /solr/docspell, but the base image does
+    # not create that core by itself -- it must be precreated before the server
+    # starts, otherwise full-text search fails with a missing-core error.
+    command:
+      - bash
+      - -c
+      - precreate-core docspell; exec solr start -f --user-managed
+    environment:
+      - SOLR_OPTS=-Dsolr.modules=analysis-extras
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:8983/solr/docspell/admin/ping || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+    binds:
+      - /lzcapp/var/solr:/var/solr
+
+  restserver:
+    # upstream: ghcr.io/docspell/restserver:v0.43.0
+    image: ghcr.1ms.run/docspell/restserver:v0.43.0
+    depends_on:
+      - db
+      - solr
+    environment:
+      - TZ=Asia/Shanghai
+      - DOCSPELL_SERVER_INTERNAL__URL=http://restserver:7880
+      - DOCSPELL_SERVER_BIND_ADDRESS=0.0.0.0
+      # Guards the admin REST endpoints; random per deployment.
+      - |-
+        DOCSPELL_SERVER_ADMIN__ENDPOINT_SECRET={{ stable_secret "docspell_admin_secret" | replace "\r" "" | replace "\n" "" }}
+      - DOCSPELL_SERVER_BACKEND_JDBC_URL=jdbc:postgresql://db:5432/docspell
+      - DOCSPELL_SERVER_BACKEND_JDBC_USER=docspell
+      - |-
+        DOCSPELL_SERVER_BACKEND_JDBC_PASSWORD={{ stable_secret "docspell_db_password" | replace "\r" "" | replace "\n" "" }}
+      - DOCSPELL_SERVER_FULL__TEXT__SEARCH_ENABLED=true
+      - DOCSPELL_SERVER_FULL__TEXT__SEARCH_SOLR_URL=http://solr:8983/solr/docspell
+      # Signup needs an invite key; the password to mint those keys is the
+      # deploy param, so only the operator can add accounts.
+      - DOCSPELL_SERVER_BACKEND_SIGNUP_MODE=invite
+      - |-
+        DOCSPELL_SERVER_BACKEND_SIGNUP_NEW__INVITE__PASSWORD={{ .U.invite_password }}
+      - DOCSPELL_ADDONS_ENABLED=false
+    binds:
+      - /lzcapp/var/files:/data
+
+  joex:
+    image: ghcr.1ms.run/docspell/joex:v0.43.0
+    depends_on:
+    - db
+      - solr
+    environment:
+      - TZ=Asia/Shanghai
+      - DOCSPELL_JOEX_APP__ID=joex1
+      - DOCSPELL_JOEX_PERIODIC__SCHEDULER_NAME=joex1
+      - DOCSPELL_JOEX_SCHEDULER_NAME=joex1
+      - DOCSPELL_JOEX_BASE__URL=http://joex:7878
+      - DOCSPELL_JOEX_BIND_ADDRESS=0.0.0.0
+      - DOCSPELL_JOEX_FULL__TEXT__SEARCH_ENABLED=true
+      - DOCSPELL_JOEX_FULL__TEXT__SEARCH_SOLR_URL=http://solr:8983/solr/docspell
+      - DOCSPELL_JOEX_JDBC_URL=jdbc:postgresql://db:5432/docspell
+      - DOCSPELL_JOEX_JDBC_USER=docspell
+      - |-
+        DOCSPELL_JOEX_JDBC_PASSWORD={{ stable_secret "docspell_db_password" | replace "\r" "" | replace "\n" "" }}
+      - DOCSPELL_JOEX_ADDONS_EXECUTOR__CONFIG_RUNNER=trivial
+    binds:
+      - /lzcapp/var/files:/data
+
+usage: |
+  Docspell 是个人文档管理工具：把扫描件和电子文件统一收进来，自动 OCR、打标签、做全文检索。
+
+  使用方法：
+  1. 打开应用，进注册页面创建第一个账号。注册需要邀请密钥：
+     在登录页点"注册"，如果没有密钥，说明需要用邀请密码生成。
+  2. 生成邀请密钥：用安装时设置的邀请密码调用管理接口：
+     curl -X POST "https://<你的应用域名>/api/v1/open/signup/new-invite" \
+          -H "X-Docspell-Auth: <邀请密码>" -H "Content-Type: application/json" -d "{}"
+     返回的密钥即为注册用邀请码（首次也可直接用管理员端点创建账号）。
+  3. 有了账号后，把 PDF/图片上传到"上传"区，joex 会自动 OCR 并提取文本。
+  4. 在"搜索"里用关键词找内容，在"分类/标签"里整理。
+
+  数据与安全：
+  - 数据库在 PostgreSQL（/lzcapp/var/pgdata），文件与索引在 /lzcapp/var/files，
+    检索索引在 /lzcapp/var/solr。卸载应用会一并删除，请定期备份。
+  - 数据库密码、管理端点密钥由平台稳定密钥生成；账号注册受邀请密码保护，
+    不存在内置弱口令。
+  - 应用经懒猫入口鉴权访问。
+
+  说明：
+  - 四个容器：restserver + joex + PostgreSQL + Solr。Solr 需要预建 docspell core（已配置），
+    内存占用偏高，建议设备有 4GB 以上可用内存。
+  - 已关闭 addons（addons 需要挂 docker socket，本包不开放）。
+  - 未配置邮件服务，邮件导入与找回密码不可用。
+  - 未做真机验证：注册、上传、OCR、全文检索以及重启后持久化均未在设备上实测。

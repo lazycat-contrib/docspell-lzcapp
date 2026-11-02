@@ -1,0 +1,12 @@
+params:
+  - id: invite_password
+    type: secret
+    name: Invitation password
+    description: "Password used to mint invitation keys. You need it to create the first account."
+    default_value: "$random(len=20)"
+    optional: false
+locales:
+  zh:
+    invite_password:
+      name: 邀请密码
+      description: 用于生成邀请密钥的密码。首次注册账号需要它，请记好。

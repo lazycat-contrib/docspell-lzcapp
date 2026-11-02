@@ -1,0 +1,18 @@
+package: community.lazycat.app.docspell
+name: Docspell
+version: 0.0.0
+description: "Personal document organizer: OCR, tag, and search your scanned papers."
+min_os_version: "1.5.0"
+homepage: https://docspell.org/
+author: Eike Kettner
+license: AGPL-3.0
+permissions:
+  required:
+    - net.internet
+locales:
+  zh:
+    name: Docspell
+    description: "个人文档管理：扫描件自动 OCR，打标签归类，全文检索，把纸质资料数字化。"
+  en:
+    name: Docspell
+    description: "Personal document organizer: OCR, tag, and search your scanned papers."
