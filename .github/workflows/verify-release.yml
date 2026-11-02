@@ -1,0 +1,154 @@
+name: Verify Docspell Release on GitHub
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify
+        required: false
+        default: v0.43.0
+permissions:
+  contents: read
+concurrency:
+  group: docspell-release-verification
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then TAG="$(gh release view --json tagName --jq .tagName)"; fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Download exact Release asset on runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ASSET_NAME="community.lazycat.app.docspell-${RELEASE_TAG}.lpk"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+          gh release view "$RELEASE_TAG" --json tagName,assets > release-metadata.json
+          gh release download "$RELEASE_TAG" --pattern "$ASSET_NAME" --dir verify-pkg
+
+      - name: Verify package contents
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, tarfile, yaml
+
+          tag = os.environ['RELEASE_TAG']
+          name = os.environ['ASSET_NAME']
+          pkg = __import__('pathlib').Path('verify-pkg') / name
+          assert pkg.is_file(), pkg
+
+          h = hashlib.sha256()
+          with pkg.open('rb') as fh:
+              for chunk in iter(lambda: fh.read(1 << 20), b''):
+                  h.update(chunk)
+
+          with tarfile.open(pkg, 'r:') as package:
+              members = package.getnames()
+              for required in ('manifest.yml', 'package.yml', 'content.tar', 'icon.png'):
+                  assert required in members, (required, members)
+
+              info = yaml.safe_load(package.extractfile('package.yml').read())
+              assert info['package'] == 'community.lazycat.app.docspell', info['package']
+              assert info['name'] == 'Docspell', info['name']
+              assert tag.startswith('v'), tag
+              assert info['version'] == tag.lstrip('v'), (info['version'], tag)
+              assert info['license'] == 'AGPL-3.0', info['license']
+              assert info['min_os_version'] == '1.5.0', info['min_os_version']
+
+              m = yaml.safe_load(package.extractfile('manifest.yml').read())
+              app = m['application']
+              assert app['subdomain'] == 'docspell', app['subdomain']
+              ups = app['upstreams']
+              assert any(u['location'] == '/' and u['backend'] == 'http://restserver:7880/' for u in ups), ups
+              # db and solr must not be reachable through the ingress
+              for u in ups:
+                  b = u.get('backend') or ''
+                  assert 'db:' not in b and 'solr:' not in b, b
+
+              svcs = m['services']
+              assert set(svcs) == {'db', 'solr', 'restserver', 'joex'}, set(svcs)
+
+              rs = svcs['restserver']
+              # the registry must stay ghcr: the Docker Hub copy of this repo is
+              # deprecated and stops at v0.42.0
+              assert rs['image'].startswith('ghcr.1ms.run/docspell/restserver:'), rs['image']
+              assert rs['image'].endswith(':' + tag), rs['image']
+
+              jx = svcs['joex']
+              assert jx['image'].startswith('ghcr.1ms.run/docspell/joex:'), jx['image']
+              assert jx['image'].endswith(':' + tag), jx['image']
+
+              renv = ' '.join(rs['environment'])
+              assert 'DOCSPELL_SERVER_BACKEND_SIGNUP_MODE=invite' in renv, renv
+              assert 'DOCSPELL_SERVER_BACKEND_SIGNUP_NEW__INVITE__PASSWORD=' in renv, renv
+              assert '.U.invite_password' in renv, renv
+              assert 'DOCSPELL_SERVER_ADMIN__ENDPOINT_SECRET=' in renv, renv
+              assert 'stable_secret' in renv, renv
+              assert 'DOCSPELL_SERVER_BACKEND_JDBC_URL=jdbc:postgresql://db:5432/docspell' in renv, renv
+              assert 'DOCSPELL_SERVER_FULL__TEXT__SEARCH_SOLR_URL=http://solr:8983/solr/docspell' in renv, renv
+              assert 'DOCSPELL_SERVER_BIND_ADDRESS=0.0.0.0' in renv, renv
+              assert 'DOCSPELL_ADDONS_ENABLED=false' in renv, renv
+
+              jenv = ' '.join(jx['environment'])
+              assert 'DOCSPELL_JOEX_BASE__URL=http://joex:7878' in jenv, jenv
+              assert 'DOCSPELL_JOEX_FULL__TEXT__SEARCH_SOLR_URL=http://solr:8983/solr/docspell' in jenv, jenv
+              assert 'DOCSPELL_JOEX_JDBC_URL=jdbc:postgresql://db:5432/docspell' in jenv, jenv
+
+              # restserver and joex must see the same document store
+              rs_binds = rs['binds']
+              jx_binds = jx['binds']
+              assert any(b.endswith(':/data') for b in rs_binds), rs_binds
+              assert any(b.endswith(':/data') for b in jx_binds), jx_binds
+              rs_src = [b.split(':')[0] for b in rs_binds if b.endswith(':/data')][0]
+              jx_src = [b.split(':')[0] for b in jx_binds if b.endswith(':/data')][0]
+              assert rs_src == jx_src, (rs_src, jx_src)
+
+              solr = svcs['solr']
+              assert 'solr:10' in solr['image'], solr['image']
+              # the core must be precreated, otherwise the /solr/docspell URL 404s
+              cmd = ' '.join(str(x) for x in solr.get('command', []))
+              assert 'precreate-core docspell' in cmd, cmd
+              assert 'analysis-extras' in ' '.join(str(x) for x in solr.get('environment', [])), solr.get('environment')
+
+              db = svcs['db']
+              assert 'postgres:16' in db['image'], db['image']
+              assert any(b.endswith(':/var/lib/postgresql/data') for b in db['binds']), db['binds']
+
+              params = yaml.safe_load(package.extractfile('deploy_params.yml').read())
+              by_id = {q['id']: q for q in params['params']}
+              assert set(by_id) == {'invite_password'}, set(by_id)
+              assert by_id['invite_password']['type'] == 'secret'
+              assert 'random' in str(by_id['invite_password'].get('default_value', ''))
+
+              for key, svc in svcs.items():
+                  assert 'healthcheck' not in svc or key in ('db', 'solr'), (key, svc.get('healthcheck'))
+              text = package.extractfile('manifest.yml').read().decode()
+              assert 'lzc-file-chooser' not in text
+
+              with tarfile.open(fileobj=package.extractfile('content.tar')) as content:
+                  cmembers = content.getnames()
+                  lic = [n for n in cmembers if 'licenses/' in n]
+                  assert lic, cmembers
+                  main_lic = [n for n in lic if n.endswith('/LICENSE')]
+                  target = main_lic[0] if main_lic else lic[0]
+                  license_text = content.extractfile(target).read().decode()
+              assert 'GNU AFFERO GENERAL PUBLIC LICENSE' in license_text
+
+          result = {
+              'verified': True,
+              'tag': tag,
+              'sha256': h.hexdigest(),
+              'size': pkg.stat().st_size,
+              'runtime_tested': False,
+          }
+          print(json.dumps(result))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('```json\n' + json.dumps(result, indent=2) + '\n```\n')
+          PY
