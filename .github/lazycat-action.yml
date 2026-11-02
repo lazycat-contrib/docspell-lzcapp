@@ -10,7 +10,7 @@ update:
   allow_downgrade: false
   version_source:
     type: image
-    image: ghcr.io/docspell/restserver
+    image: restserver
 build:
   toolchains: []
   run_buildscript: false
