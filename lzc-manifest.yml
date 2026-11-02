@@ -46,8 +46,8 @@ services:
     binds:
       - /lzcapp/var/solr:/var/solr
   restserver:
-    # upstream: docspell/restserver:v0.42.0
-    image: docker.1ms.run/docspell/restserver:v0.42.0
+    # upstream: ghcr.io/docspell/restserver:v0.43.0
+    image: ghcr.1ms.run/docspell/restserver:v0.43.0
     depends_on:
       - db
       - solr
@@ -73,8 +73,8 @@ services:
     binds:
       - /lzcapp/var/files:/data
   joex:
-    # upstream: docspell/joex:v0.42.0
-    image: docker.1ms.run/docspell/joex:v0.42.0
+    # upstream: ghcr.io/docspell/joex:v0.43.0
+    image: ghcr.1ms.run/docspell/joex:v0.43.0
     depends_on:
       - db - solr
     environment:

@@ -1,6 +1,6 @@
 package: community.lazycat.app.docspell
 name: Docspell
-version: 0.42.0
+version: 0.43.0
 description: "Personal document organizer: OCR, tag, and search your scanned papers."
 min_os_version: "1.5.0"
 homepage: https://docspell.org/
